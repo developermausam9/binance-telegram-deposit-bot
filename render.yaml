@@ -1,0 +1,17 @@
+services:
+  - type: worker
+    name: binance-telegram-deposit-bot
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: python bot.py
+    envVars:
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: BINANCE_API_KEY
+        sync: false
+      - key: BINANCE_API_SECRET
+        sync: false
+      - key: ALLOWED_GROUP_ID
+        sync: false
+      - key: BINANCE_BASE_URL
+        value: https://api.binance.me
