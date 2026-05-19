@@ -47,8 +47,8 @@ class BinanceClient:
         ).hexdigest()
 
     def _get_proxy_list(self) -> list:
-        """Fetch an hourly-updated, tested list of free HTTP proxies."""
-        url = "https://raw.githubusercontent.com/TheSpeedX/SOCKS-List/master/http.txt"
+        """Fetch a pre-validated list of working, active HTTPS proxies."""
+        url = "https://raw.githubusercontent.com/Thordata/awesome-free-proxy-list/main/proxies/https.txt"
         try:
             response = requests.get(url, timeout=5)
             if response.status_code == 200:
