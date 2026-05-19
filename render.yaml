@@ -2,6 +2,7 @@ services:
   - type: web
     name: binance-telegram-deposit-bot
     plan: free
+    region: frankfurt
     runtime: python
     buildCommand: pip install -r requirements.txt
     startCommand: python bot.py
