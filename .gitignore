@@ -1,0 +1,15 @@
+# Environment variables (highly sensitive)
+.env
+
+# Virtual environment
+venv/
+.venv/
+env/
+
+# Python caching & build files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.DS_Store
