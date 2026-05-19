@@ -1,3 +1,4 @@
+import os
 import asyncio
 import logging
 import datetime
@@ -5,6 +6,7 @@ from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 from binance_client import BinanceClient, BinanceAPIError
 import config
+
 
 # Setup logging
 logging.basicConfig(
@@ -129,9 +131,25 @@ def main():
     app.add_handler(CommandHandler("start", start_command))
     app.add_handler(CommandHandler("check", check_command))
     
-    # Start polling for Telegram events
-    logger.info("Bot is polling. Press Ctrl+C to terminate.")
-    app.run_polling()
+    # Detect if we are running in a Render Web Service environment
+    render_url = os.getenv("RENDER_EXTERNAL_URL")
+    port_str = os.getenv("PORT")
+    
+    if render_url:
+        logger.info(f"Render Web Service environment detected. Starting in WEBHOOK mode at {render_url}...")
+        port = int(port_str) if port_str else 8080
+        # Start webhook listener
+        app.run_webhook(
+            listen="0.0.0.0",
+            port=port,
+            url_path=config.TELEGRAM_BOT_TOKEN,
+            webhook_url=f"{render_url}/{config.TELEGRAM_BOT_TOKEN}"
+        )
+    else:
+        logger.info("Local environment detected. Starting in POLLING mode...")
+        # Start polling for Telegram events locally
+        app.run_polling()
+
 
 
 if __name__ == '__main__':
