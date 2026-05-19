@@ -16,8 +16,37 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+def normalize_blockchain_deposit(d: dict) -> dict:
+    """Normalize a standard blockchain deposit object to a unified schema."""
+    return {
+        "type": "blockchain",
+        "amount": d.get("amount", "0"),
+        "coin": d.get("coin", "").upper(),
+        "network": d.get("network", "N/A"),
+        "time": int(d.get("insertTime", 0)),
+        "tx_id": d.get("txId", "").strip(),
+        "sender": None
+    }
+
+
+def normalize_pay_transaction(p: dict) -> dict:
+    """Normalize a Binance Pay transaction object to a unified schema."""
+    payer_name = p.get("payerInfo", {}).get("name") if p.get("payerInfo") else None
+    note = p.get("note", "").strip()
+    sender = note if note else payer_name
+    return {
+        "type": "pay",
+        "amount": p.get("amount", "0"),
+        "coin": p.get("currency", "").upper(),
+        "network": "Binance Pay",
+        "time": int(p.get("transactionTime", 0)),
+        "tx_id": p.get("transactionId", "").strip(),
+        "sender": sender
+    }
+
+
 def format_latest_deposit(deposit: dict) -> str:
-    """Format deposit dictionary into a clean, premium visual design."""
+    """Format normalized deposit/pay dictionary into a clean, premium visual design."""
     coin = deposit.get("coin", "").upper()
     raw_amount = deposit.get("amount", "0")
     
@@ -29,24 +58,38 @@ def format_latest_deposit(deposit: dict) -> str:
 
     network = deposit.get("network", "N/A")
     
-    # Format insertTime (in milliseconds since epoch) to: "19 May 2026, 8:30 PM"
-    insert_time_ms = deposit.get("insertTime", 0)
+    # Format time (in milliseconds since epoch) to: "19 May 2026, 8:30 PM"
+    time_ms = deposit.get("time", 0)
     try:
-        dt = datetime.datetime.fromtimestamp(insert_time_ms / 1000.0, tz=datetime.timezone.utc)
+        dt = datetime.datetime.fromtimestamp(time_ms / 1000.0, tz=datetime.timezone.utc)
         formatted_time = dt.strftime("%d %B %Y, %I:%M %p")
     except Exception:
         formatted_time = "N/A"
         
-    tx_id = deposit.get("txId", "").strip()
-    reference = tx_id if tx_id else "Internal Transfer"
+    tx_id = deposit.get("tx_id", "")
+    dep_type = deposit.get("type", "blockchain")
+    sender = deposit.get("sender")
 
-    return (
-        f"Latest deposit confirmed ✅\n\n"
-        f"Amount: {amount} {coin}\n"
-        f"Network: {network}\n"
-        f"Time: {formatted_time} (UTC)\n"
-        f"Reference: {reference}"
-    )
+    if dep_type == "pay":
+        reference_str = f"Transaction ID: {tx_id}" if tx_id else "Internal Transfer"
+        sender_str = f"\nFrom: {sender}" if sender else ""
+        return (
+            f"Latest deposit confirmed ✅\n\n"
+            f"Type: Binance Pay 💳\n"
+            f"Amount: {amount} {coin}\n"
+            f"Time: {formatted_time} (UTC){sender_str}\n"
+            f"Reference: {reference_str}"
+        )
+    else:
+        reference = tx_id if tx_id else "Internal Transfer"
+        return (
+            f"Latest deposit confirmed ✅\n\n"
+            f"Type: Blockchain Deposit ⛓\n"
+            f"Amount: {amount} {coin}\n"
+            f"Network: {network}\n"
+            f"Time: {formatted_time} (UTC)\n"
+            f"Reference: {reference}"
+        )
 
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -71,7 +114,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def check_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /check command: retrieve history, filter confirmed, pick latest, and reply."""
+    """Handle /check command: retrieve blockchain and pay histories, merge, and reply."""
     chat = update.effective_chat
     if not chat:
         return
@@ -88,17 +131,52 @@ async def check_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Offload the blocking requests network call to a worker thread using asyncio.to_thread
         client = BinanceClient()
         
-        # Query 20 recent deposits to ensure we find the latest confirmed one
-        deposits = await asyncio.to_thread(client.get_deposit_history, limit=20)
+        # Query 20 recent records from both endpoints in parallel to keep things extremely fast
+        blockchain_task = asyncio.to_thread(client.get_deposit_history, limit=20)
+        pay_task = asyncio.to_thread(client.get_pay_history, limit=20)
         
-        # Filter for confirmed deposits only (status == 1 corresponds to "Success")
-        confirmed = [d for d in deposits if d.get("status") == 1]
-        
-        if not confirmed:
+        blockchain_raw, pay_raw = await asyncio.gather(
+            blockchain_task, 
+            pay_task, 
+            return_exceptions=True
+        )
+
+        # Handle blockchain results (propagate error if both fail, otherwise log and fall back)
+        blockchain_deposits = []
+        if isinstance(blockchain_raw, Exception):
+            logger.error(f"Error fetching blockchain deposits: {blockchain_raw}")
+            if isinstance(pay_raw, Exception):
+                raise blockchain_raw  # Both failed, propagate the main exception
+        else:
+            blockchain_deposits = blockchain_raw
+
+        # Handle Pay results
+        pay_transactions = []
+        if isinstance(pay_raw, Exception):
+            logger.error(f"Error fetching Binance Pay transactions: {pay_raw}")
+        else:
+            pay_transactions = pay_raw
+
+        # Normalize and filter blockchain deposits (status == 1 corresponds to "Success")
+        normalized_blockchain = [
+            normalize_blockchain_deposit(d)
+            for d in blockchain_deposits
+            if d.get("status") == 1
+        ]
+
+        # Normalize pay transactions
+        normalized_pay = [
+            normalize_pay_transaction(p)
+            for p in pay_transactions
+        ]
+
+        # Merge and pick the absolute latest one
+        all_deposits = normalized_blockchain + normalized_pay
+
+        if not all_deposits:
             await status_message.edit_text("No deposits arrived yet")
         else:
-            # Pick the single latest confirmed deposit based on insertTime
-            latest = max(confirmed, key=lambda d: d.get("insertTime", 0))
+            latest = max(all_deposits, key=lambda d: d.get("time", 0))
             reply_text = format_latest_deposit(latest)
             await status_message.edit_text(reply_text)
             
